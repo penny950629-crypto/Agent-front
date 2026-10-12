@@ -1,6 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom'; // ★ 1. 引入路由跳轉 Hook
 import { VitalBar } from '../components/VitalBar';
-import { useNavigate } from 'react-router-dom'; // ★ 1. 引入 useNavigate 路由跳轉 Hook
 
 // --- 介面與資料型別定義 ---
 interface PredictionPatient {
@@ -182,6 +182,8 @@ export default function WaitingList() {
     );
   };
 
+  
+
   return (
     <div style={{ backgroundColor: '#F9FAFB', minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
       {renderTopBar()}
@@ -231,7 +233,7 @@ export default function WaitingList() {
               <div style={{ textAlign: 'center' }}>
                 生命徵象即時分析
                 <div style={{ fontSize: '11px', color: '#9CA3AF', fontWeight: 'normal', marginTop: '2px' }}>
-                  T | HR | RR | SBP | DBP | SpO2
+                  T | HR | RR | SBP | DBP | SPO2
                 </div>
               </div>
 
@@ -280,8 +282,8 @@ export default function WaitingList() {
                     <div>
                       <div style={{ fontWeight: 'bold', fontSize: '16px', color: '#111827' }}>{patient.patient_name}</div>
                       <div style={{ fontSize: '13px', color: '#6B7280', marginTop: '2px' }}>
-                        {patient.gender}, {patient.age}Y
-                      </div>
+                             {patient.gender}, {patient.age}Y
+                             </div>
                     </div>
                     <div>
                       <span style={{ backgroundColor: triageColors[patient.triage_degree] || '#9CA3AF', color: '#fff', padding: '4px 12px', borderRadius: '999px', fontSize: '13px', fontWeight: 'bold' }}>
@@ -299,8 +301,8 @@ export default function WaitingList() {
                         <VitalBar label="RR" displayValue={patient.vitals?.rr || '-'} numericValue={patient.vitals?.rr} age={patient.age} />
                         <VitalBar label="SBP" displayValue={patient.vitals?.sbp || '-'} numericValue={patient.vitals?.sbp} age={patient.age} />
                         <VitalBar label="DBP" displayValue={patient.vitals?.dbp || '-'} numericValue={patient.vitals?.dbp} age={patient.age} />
-                        <VitalBar label="SpO2" displayValue={patient.vitals?.spo2 || '-'} numericValue={patient.vitals?.spo2} age={patient.age} />
-                    </div>
+                        <VitalBar label="SPO2" displayValue={patient.vitals?.spo2 || '-'} numericValue={patient.vitals?.spo2} age={patient.age} />
+                        </div>
 
                     {/* AI 預測區塊 */}
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
@@ -314,12 +316,9 @@ export default function WaitingList() {
                           <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#374151', marginTop: '2px' }}>{admitPrediction}</div>
                         </div>
                       </div>
-                      
-                      {/* ★ 3. 修改按鈕：加上 onClick 觸發跳轉，網址帶上該病患的病歷號 */}
                       <button 
                         type="button"
-                        // ★ 這裡改成傳遞真實的資料庫主鍵 prediction_id
-                        onClick={() => navigate(`/into-consult/${patient.prediction_id}`)}
+                        onClick={() => navigate(`/into-consult/${patient.prediction_id}`)} // ★ 3. 加上點擊跳轉並帶入 ID
                         style={{ width: '100%', padding: '6px', border: '1px solid #3B82F6', backgroundColor: '#fff', color: '#3B82F6', borderRadius: '4px', fontSize: '13px', cursor: 'pointer', fontWeight: 'bold', transition: '0.2s' }}
                         onMouseOver={(e) => { e.currentTarget.style.backgroundColor = '#EFF6FF' }}
                         onMouseOut={(e) => { e.currentTarget.style.backgroundColor = '#fff' }}
