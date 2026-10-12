@@ -1,6 +1,6 @@
 # ED-DSS Project Instructions
 - Context: AI-assisted Emergency Department Triage & Deterioration Risk Prediction System.
-- Stack: React (Frontend), Python (FASTAPI), MySQL, Scikit-learn (Random Forest, KNN), XGBoost.
+- Stack: React (Frontend), Python (FASTAPI), supabase, Scikit-learn (Random Forest, KNN), XGBoost.
 - Security (CRITICAL): NEVER use or generate real patient data (PHI). Use mock data only. Never commit `.env`.
 - Architecture: Frontend (React) is for UI/state. AI inference and database queries MUST be isolated in the Python backend.
 - Naming: Use accurate medical terms (e.g., `triageLevel`, `vitalSigns`); strictly use camelCase.
