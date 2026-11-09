@@ -2,6 +2,23 @@
 
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
+## E2E 測試
+
+安裝 Playwright 測試套件與 Chromium 瀏覽器：
+
+```bash
+npm install -D @playwright/test
+npx playwright install chromium
+```
+
+執行首頁與急診戰情看板測試：
+
+```bash
+npm run test:e2e
+```
+
+測試會使用空的模擬 API 回應，不會連接後端或使用真實病患資料。
+
 Currently, two official plugins are available:
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
