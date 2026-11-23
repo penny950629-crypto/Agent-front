@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import RightAdvice from './Right_Advice';
+import { useState } from 'react';
 import RightAnalysis from './Right_Analysis';
 import RightBasicInfo from './Right_BasicInfo';
 
@@ -71,38 +70,8 @@ const getXaiContribution = (patient: Patient) => {
   return factors.sort((a, b) => b.impact - a.impact);
 };
 
-const getAiRecommendations = (patient: Patient) =>
-  patient.risk_score >= 80
-    ? [
-        '立即安排優先看診並通報主治醫師',
-        '每 15 分鐘連續監測 SpO2 與血壓',
-        '預先建立靜脈留置針 (IV line)',
-        '準備動脈血氣分析 (ABG) 採檢組合',
-        '視呼吸狀況給予低流量氧氣補充 (2-4 L/min)',
-      ]
-    : patient.risk_score >= 50
-    ? [
-        '建議於 30 分鐘內重測生命徵象',
-        '密切觀察胸悶/呼吸急促等主訴變化',
-        '安排心電圖 (ECG) 檢查',
-      ]
-    : [
-        '按標準流程排隊候診',
-        '衛教病患若有不適加劇需立即告知護理站',
-        '於 60 分鐘後追蹤基礎生命徵象',
-      ];
-
 export default function RightPanel({ patient, onClose }: RightPanelProps) {
-  const [selectedItems, setSelectedItems] = useState<string[]>([]);
-  const [showManualInput, setShowManualInput] = useState(false);
-  const [manualNote, setManualNote] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    setSelectedItems([]);
-    setShowManualInput(false);
-    setManualNote('');
-  }, [patient?.patient_id]);
 
   const handleSubmit = async () => {
     if (!patient || !patient.triage_id) {
@@ -112,22 +81,8 @@ export default function RightPanel({ patient, onClose }: RightPanelProps) {
 
     const isObserving = patient.status === '觀察中';
     let targetStatus = '觀察中';
-    let alertMessageStr = '';
-
     if (isObserving) {
       targetStatus = '未處理';
-      alertMessageStr = '';
-    } else {
-      const treatments = [
-        ...selectedItems,
-        ...(manualNote.trim() ? [`[手動輸入] ${manualNote.trim()}`] : []),
-      ];
-
-      if (!treatments.length) {
-        alert('請先勾選 AI 處置建議或透過「手動輸入」補充處置內容！');
-        return;
-      }
-      alertMessageStr = treatments.map((item, index) => `${index + 1}. ${item}`).join('\n');
     }
 
     try {
@@ -140,7 +95,7 @@ export default function RightPanel({ patient, onClose }: RightPanelProps) {
         },
         body: JSON.stringify({
           status: targetStatus,
-          alert_message: alertMessageStr
+          alert_message: ''
         })
       });
 
@@ -148,12 +103,8 @@ export default function RightPanel({ patient, onClose }: RightPanelProps) {
         if (isObserving) {
           alert(`病患 ${patient.patient_id} 已轉回待處理！`);
         } else {
-          alert(`病患 ${patient.patient_id} 已成功轉入觀察！\n\n【採納的處置內容】：\n${alertMessageStr}`);
+          alert(`病患 ${patient.patient_id} 已成功轉入觀察！`);
         }
-        
-        setSelectedItems([]);
-        setManualNote('');
-        setShowManualInput(false);
         window.location.reload();
       } else {
         const errorData = await response.json();
@@ -264,24 +215,24 @@ export default function RightPanel({ patient, onClose }: RightPanelProps) {
             riskColor={getRiskColor(patient.risk_score)}
             xaiData={getXaiContribution(patient)}
           />
-          <RightAdvice
-            recommendations={getAiRecommendations(patient)}
-            selectedItems={selectedItems}
-            showManualInput={showManualInput}
-            manualNote={manualNote}
-            isSubmitting={isSubmitting}
-            currentStatus={patient.status || '未處理'}
-            onCheckboxChange={(item) =>
-              setSelectedItems((items) =>
-                items.includes(item)
-                  ? items.filter((value) => value !== item)
-                  : [...items, item]
-              )
-            }
-            onToggleManualInput={() => setShowManualInput((value) => !value)}
-            onManualNoteChange={setManualNote}
-            onSubmit={handleSubmit}
-          />
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={isSubmitting}
+            style={{
+              width: '100%',
+              padding: '14px',
+              borderRadius: '10px',
+              border: 'none',
+              backgroundColor: isSubmitting ? '#94A3B8' : patient.status === '觀察中' ? '#F59E0B' : '#3B82F6',
+              color: 'white',
+              fontSize: '15px',
+              fontWeight: 'bold',
+              cursor: isSubmitting ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {isSubmitting ? '處理中...' : patient.status === '觀察中' ? '取消觀察（轉回待處理）' : '確定轉入觀察'}
+          </button>
         </div>
       ) : (
         <div
@@ -323,7 +274,7 @@ export default function RightPanel({ patient, onClose }: RightPanelProps) {
             請選擇病患
           </p>
           <span style={{ fontSize: '12px' }}>
-            點擊左側列表即可在此載入「病患內容」、「XAI 分析」與「處置選擇」
+            點擊左側列表即可在此載入「病患內容」與「XAI 分析」
           </span>
         </div>
       )}

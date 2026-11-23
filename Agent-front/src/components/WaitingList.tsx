@@ -1,7 +1,6 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom'; // ★ 1. 引入路由跳轉 Hook
 import { VitalBar } from '../components/VitalBar';
-import { useProcessedPatients } from '../context/useProcessedPatients';
 import { fetchPredictionPatients, getPredictedDisposition, type PredictionPatient } from '../services/predictionApi';
 
 // --- 介面與資料型別定義 ---
@@ -19,7 +18,6 @@ export default function WaitingList() {
   const [loading, setLoading] = useState<boolean>(true);
   const [demoNotice, setDemoNotice] = useState('');
   const navigate = useNavigate(); // ★ 2. 宣告 navigate 函式
-  const { isPatientProcessed } = useProcessedPatients();
 
   // 篩選狀態：null 代表顯示全部
   const [selectedLevel, setSelectedLevel] = useState<number | null>(null);
@@ -66,7 +64,7 @@ export default function WaitingList() {
   const activePatients = patients.filter((patient) => {
     const selectedArea = localStorage.getItem('fjcu-demo-duty-area');
     const inSelectedArea = !selectedArea || !patient.area || patient.area === selectedArea;
-    return inSelectedArea && !isPatientProcessed(String(patient.prediction_id));
+    return inSelectedArea;
   });
   const counts = { total: activePatients.length, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   activePatients.forEach(p => {

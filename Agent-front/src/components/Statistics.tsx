@@ -1,9 +1,6 @@
 import { useState } from 'react';
 import { demoPredictionPatients } from '../services/predictionApi';
-import { useProcessedPatients } from '../context/useProcessedPatients';
-
 export default function Statistics({ isDarkMode }: { isDarkMode?: boolean }) {
-  const { processedPatients, isPatientProcessed } = useProcessedPatients();
   const [timeRange, setTimeRange] = useState('今日');
 
   const today = new Date();
@@ -15,31 +12,16 @@ export default function Statistics({ isDarkMode }: { isDarkMode?: boolean }) {
   const startKey = rangeStart.toISOString().slice(0, 10);
   const analyticsRecords = [
     ...demoPredictionPatients
-      .filter((patient) => !isPatientProcessed(String(patient.prediction_id)))
       .map((patient) => ({
         date: todayKey,
         hour: Number(patient.arrivalTime?.slice(0, 2)) || 8,
         triageLevel: patient.triage_degree,
         riskPercent: patient.serious_risk_pct,
-        decision: '',
       })),
-    ...processedPatients.map((patient) => ({
-      date: patient.processedAt.slice(0, 10),
-      hour: new Date(patient.processedAt).getHours(),
-      triageLevel: patient.triageLevel,
-      riskPercent: patient.riskPercent,
-      decision: patient.decision,
-    })),
   ].filter((record) => record.date >= startKey && record.date <= todayKey);
 
   const totalCount = analyticsRecords.length;
   const highRiskCount = analyticsRecords.filter((record) => record.riskPercent >= 50).length;
-  const adoptedCount = analyticsRecords.filter((record) => record.decision === '完全採納' || record.decision === '部分採納').length;
-  const decisionCounts = {
-    '完全採納': analyticsRecords.filter((record) => record.decision === '完全採納').length,
-    '部分採納': analyticsRecords.filter((record) => record.decision === '部分採納').length,
-    '未採納': analyticsRecords.filter((record) => record.decision === '未採納').length,
-  };
   const levels = [
     { level: 1, name: '第一級 復甦急救', color: '#EF4444', bg: '#FEE2E2' },
     { level: 2, name: '第二級 危急', color: '#F97316', bg: '#FFEDD5' },
@@ -101,7 +83,7 @@ export default function Statistics({ isDarkMode }: { isDarkMode?: boolean }) {
       </div>
 
       {/* 四大 KPI 數據卡片區 */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '16px', marginBottom: '24px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '16px', marginBottom: '24px' }}>
         {/* Card 1: 總檢傷人數 */}
         <div style={{ backgroundColor: '#EFF6FF', padding: '20px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #BFDBFE' }}>
           <div>
@@ -120,23 +102,6 @@ export default function Statistics({ isDarkMode }: { isDarkMode?: boolean }) {
           <div style={{ fontSize: '32px' }}>🚑</div>
         </div>
 
-        {/* Card 3: 平均檢傷耗時 */}
-        <div style={{ backgroundColor: '#ECFDF5', padding: '20px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #A7F3D0' }}>
-          <div>
-            <div style={{ color: '#047857', fontSize: '14px', fontWeight: 'bold', marginBottom: '8px' }}>醫師回饋筆數</div>
-            <div style={{ color: '#064E3B', fontSize: '28px', fontWeight: 'bold' }}>{Object.values(decisionCounts).reduce((sum, count) => sum + count, 0)} <span style={{ fontSize: '16px' }}>筆</span></div>
-          </div>
-          <div style={{ fontSize: '32px' }}>⏱️</div>
-        </div>
-
-        {/* Card 4: AI 建議採納率 */}
-        <div style={{ backgroundColor: '#FAF5FF', padding: '20px', borderRadius: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', border: '1px solid #E9D5FF' }}>
-          <div>
-            <div style={{ color: '#7E22CE', fontSize: '14px', fontWeight: 'bold', marginBottom: '8px' }}>AI 建議採納率</div>
-            <div style={{ color: '#581C87', fontSize: '28px', fontWeight: 'bold' }}>{Object.values(decisionCounts).reduce((sum, count) => sum + count, 0) ? ((adoptedCount / Object.values(decisionCounts).reduce((sum, count) => sum + count, 0)) * 100).toFixed(1) : '0.0'} <span style={{ fontSize: '16px' }}>%</span></div>
-          </div>
-          <div style={{ fontSize: '32px', color: '#A855F7', backgroundColor: '#F3E8FF', borderRadius: '50%', width: '40px', height: '40px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✓</div>
-        </div>
       </div>
 
       {/* 底部圖表區：分為左右兩塊 */}
@@ -201,24 +166,6 @@ export default function Statistics({ isDarkMode }: { isDarkMode?: boolean }) {
           </div>
         </div>
 
-        <div style={{ marginTop: '24px', backgroundColor: cardBg, padding: '24px', borderRadius: '12px', border: `1px solid ${borderColor}` }}>
-          <h3 style={{ margin: '0 0 18px', fontSize: '16px', color: textColor }}>醫師對 AI 建議的採納與回饋分佈</h3>
-          {Object.entries(decisionCounts).map(([label, count], index) => {
-            const colors = ['#16A34A', '#2563EB', '#DC2626'];
-            const totalDecisions = Object.values(decisionCounts).reduce((sum, value) => sum + value, 0);
-            const percent = totalDecisions ? (count / totalDecisions) * 100 : 0;
-            return (
-              <div key={label} style={{ marginBottom: '14px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '6px', color: subTextColor, fontSize: '13px' }}>
-                  <span>{label}（{count} 筆）</span><span>{percent.toFixed(1)}%</span>
-                </div>
-                <div style={{ height: '10px', backgroundColor: isDarkMode ? '#334155' : '#F1F5F9', borderRadius: '999px', overflow: 'hidden' }}>
-                  <div style={{ width: `${percent}%`, height: '100%', backgroundColor: colors[index], borderRadius: '999px' }} />
-                </div>
-              </div>
-            );
-          })}
-        </div>
         <p style={{ marginTop: '16px', color: subTextColor, fontSize: '12px' }}>此看板使用去識別化示範資料及本瀏覽器回饋紀錄，僅供介面展示，不代表臨床統計。</p>
 
       </div>
