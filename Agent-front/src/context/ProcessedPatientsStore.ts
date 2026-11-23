@@ -10,6 +10,9 @@ export interface ProcessedPatient {
   complaint: string;
   riskPercent: number;
   decision: string;
+  admissionOutcome?: string;
+  updatedBy?: string;
+  updatedAt?: string;
   doctorNote: string;
   treatments: string[];
   processedAt: string;

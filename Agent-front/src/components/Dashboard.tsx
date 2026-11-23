@@ -5,11 +5,22 @@ import Leftmiddle from './Leftmiddle';
 import Leftcorner from './Leftcorner';
 import MiddlePanel from './MiddlePanel';
 import RightPanel from './RightPanel';
+import { demoPredictionPatients } from '../services/predictionApi';
+
+interface DashboardPatient {
+  patient_id: string;
+  triage_id?: string;
+  status: string;
+  final_level: number;
+  risk_score: number;
+  alert_message?: string;
+  [key: string]: unknown;
+}
 
 export default function Dashboard() {
-  const [patients, setPatients] = useState<any[]>([]);
+  const [patients, setPatients] = useState<DashboardPatient[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [selectedPatient, setSelectedPatient] = useState<any | null>(null);
+  const [selectedPatient, setSelectedPatient] = useState<DashboardPatient | null>(null);
 
   const [statusFilter, setStatusFilter] = useState<string>('未處理');
   const [selectedLevel, setSelectedLevel] = useState<number | null>(null);
@@ -21,19 +32,44 @@ export default function Dashboard() {
       .then(response => response.json())
       .then(data => {
         if (Array.isArray(data)) {
-          const normalizedData = data.map(p => ({
-            ...p,
-            status: p.status || '未處理'
-          }));
+          const normalizedData = (data as unknown[])
+            .filter((item): item is Record<string, unknown> => typeof item === 'object' && item !== null)
+            .map((item): DashboardPatient => ({
+              ...item,
+              patient_id: String(item.patient_id ?? ''),
+              status: typeof item.status === 'string' ? item.status : '未處理',
+              final_level: Number(item.final_level) || 0,
+              risk_score: Number(item.risk_score) || 0,
+              triage_id: item.triage_id === undefined ? undefined : String(item.triage_id),
+            }));
           setPatients(normalizedData);
           setError(null);
         } else {
-          setError(data.error || "無法讀取資料");
+          const apiMessage = typeof data === 'object' && data !== null && 'error' in data ? data.error : null;
+          setError(typeof apiMessage === 'string' ? apiMessage : '無法讀取資料');
         }
       })
       .catch(err => {
-        setError("無法連線到後端 API");
         console.error(err);
+        setPatients(demoPredictionPatients.map((patient) => ({
+          patient_id: patient.medicalRecordNo ?? String(patient.prediction_id),
+          patient_name: patient.patient_name,
+          triage_id: String(patient.prediction_id),
+          final_level: patient.triage_degree,
+          risk_score: patient.serious_risk_pct,
+          status: '未處理',
+          sentiment: patient.complaint ?? '',
+          temperature: patient.t,
+          heart_rate: patient.hr,
+          respiratory_rate: patient.rr,
+          sbp: patient.sbp,
+          dbp: patient.dbp,
+          spo2: patient.spo2,
+          age: patient.age,
+          gender: patient.gender,
+          admission_distribution: patient.admit_distribution,
+        })));
+        setError('後端 API 無法連線，畫面改用去識別化示範資料；風險分數非臨床建議。');
       })
       .finally(() => {
         setIsLoading(false);

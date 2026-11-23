@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useProcessedPatients } from '../context/useProcessedPatients';
+import { fetchPredictionPatients, getPredictedDisposition } from '../services/predictionApi';
+import { readDemoSession } from '../services/demoAuth';
 import { 
   ArrowLeft, 
   Bot, 
@@ -11,17 +13,47 @@ import {
   AlertTriangle
 } from 'lucide-react';
 
+interface XaiFactor {
+  name: string;
+  impact: number;
+  type: 'pos' | 'neg';
+}
+
+interface ConsultReference {
+  title: string;
+  desc: string;
+  score: string;
+  page: string;
+}
+
+interface ConsultPatient {
+  id: string;
+  name: string;
+  gender: string;
+  age: number;
+  level: number;
+  summary: string;
+  vitals: Record<string, string | number>;
+  ai_risk_score: number;
+  ai_disposition: string;
+  ensemble_votes: { RF: boolean; XGB: boolean; KNN: boolean };
+  xai_factors: XaiFactor[];
+  references: ConsultReference[];
+}
+
 export default function IntoConsult() {
   const { id } = useParams(); 
   const navigate = useNavigate();
   const { archivePatient } = useProcessedPatients();
   const [loading, setLoading] = useState<boolean>(true);
-  const [patient, setPatient] = useState<any>(null);
+  const [patient, setPatient] = useState<ConsultPatient | null>(null);
+  const [demoNotice, setDemoNotice] = useState('');
 
   // Modal 與 Toast 狀態管理
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [pendingFeedback, setPendingFeedback] = useState('');
   const [doctorFeedback, setDoctorFeedback] = useState('');
+  const [actualDisposition, setActualDisposition] = useState('急診留觀／出院');
 
   // 處置項目的勾選狀態
   const [selectedTreatments, setSelectedTreatments] = useState<Record<string, boolean>>({
@@ -145,7 +177,7 @@ export default function IntoConsult() {
     };
   };
   // 根據主訴與實際惡化風險機率（riskScore），動態計算成比例的 XAI 貢獻度與處置建議
-  const generateXAIAndTreatment = (complaint: string, level: number, riskScore: number, spo2?: number, t?: number) => {
+  const generateXAIAndTreatment = (complaint: string, level: number, riskScore: number, spo2?: number, t?: number): { xai_factors: XaiFactor[]; treatments: Record<string, boolean> } => {
     const text = (complaint || '').toLowerCase();
     
     // ★ 依照該病患真實的 3hr 風險分數，按比例拆解 XAI 貢獻度，使其合理對應總風險
@@ -153,7 +185,7 @@ export default function IntoConsult() {
     const p2 = Math.max(Number((riskScore * 0.30).toFixed(1)), 0.3);
     const p3 = Math.max(Number((riskScore * 0.15).toFixed(1)), 0.1);
 
-    let xai_factors = [
+    let xai_factors: XaiFactor[] = [
       { name: "主訴症狀與特徵匹配度", impact: p1, type: 'pos' },
       { name: "生理生命徵象數值偏移", impact: p2, type: 'pos' },
       { name: "年齡與基礎共病風險權重", impact: p3, type: 'pos' }
@@ -233,39 +265,27 @@ export default function IntoConsult() {
 
   // 從後端 API 獲取真實資料庫數據
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/predictions')
-      .then((res) => res.json())
-      .then((data) => {
-        const found = data.find((p: any, index: number) => {
+    let active = true;
+    fetchPredictionPatients().then(({ patients: data, isDemoData, message }) => {
+      if (!active) return;
+      setDemoNotice(isDemoData ? message : '');
+        const found = data.find((p, index) => {
           const generatedId = p.medicalRecordNo || `00${8877665 + index}J`;
           return String(p.prediction_id) === id || generatedId === id;
         });
 
         if (found) {
-          let disposition = '急診留觀 / 出院';
-          try {
-            const distObj = typeof found.admit_distribution === 'string' 
-              ? JSON.parse(found.admit_distribution) 
-              : found.admit_distribution;
-            
-            if (distObj['ICU']) {
-              disposition = 'ICU 病房';
-            } else if (distObj['Ward']) {
-              disposition = '一般病房';
-            }
-          } catch (e) {
-            console.error("解析動向失敗", e);
-          }
+          const disposition = getPredictedDisposition(found.admit_distribution);
 
-          const dynamicData = generateXAIAndTreatment(found.complaint, found.triage_degree, found.serious_risk_pct, found.spo2, found.t);
+          const dynamicData = generateXAIAndTreatment(found.complaint || '', found.triage_degree, found.serious_risk_pct, Number(found.spo2), Number(found.t));
           setSelectedTreatments(dynamicData.treatments);
 
           setPatient({
             id: found.medicalRecordNo || `00${8877665 + data.indexOf(found)}J`,
-            name: found.patient_name,
-            gender: found.gender,
-            age: found.age,
-            level: found.triage_degree,
+            name: found.patient_name || '示範病患',
+            gender: found.gender || '未提供',
+            age: Number(found.age) || 0,
+            level: Number(found.triage_degree) || 0,
             summary: found.complaint || '無特殊主訴紀錄',
             vitals: {
               temperature: found.t ?? '--',
@@ -275,12 +295,12 @@ export default function IntoConsult() {
               diastolicBloodPressure: found.dbp ?? '--',
               spo2: found.spo2 ?? '--',
             },
-            ai_risk_score: found.serious_risk_pct,
+            ai_risk_score: Number(found.serious_risk_pct) || 0,
             ai_disposition: disposition,
             ensemble_votes: { 
-              RF: found.serious_risk_pct > 20, 
-              XGB: found.serious_risk_pct > 30, 
-              KNN: found.serious_risk_pct > 40 
+              RF: Number(found.serious_risk_pct) > 20,
+              XGB: Number(found.serious_risk_pct) > 30,
+              KNN: Number(found.serious_risk_pct) > 40
             },
             xai_factors: dynamicData.xai_factors,
             references: [
@@ -290,11 +310,8 @@ export default function IntoConsult() {
           });
         }
         setLoading(false);
-      })
-      .catch((err) => {
-        console.error('讀取病患詳細資料失敗:', err);
-        setLoading(false);
-      });
+    });
+    return () => { active = false; };
   }, [id]);
 
   const promptFeedback = (reason: string) => {
@@ -304,6 +321,7 @@ export default function IntoConsult() {
   };
 
   const confirmSubmitFeedback = () => {
+    if (!patient || !pendingFeedback) return;
     const checkedItems = Object.entries(selectedTreatments)
       .filter(([, isChecked]) => isChecked)
       .map(([name]) => name);
@@ -317,6 +335,9 @@ export default function IntoConsult() {
       complaint: patient.summary || '未提供主訴',
       riskPercent: Number(patient.ai_risk_score) || 0,
       decision: pendingFeedback,
+      admissionOutcome: actualDisposition,
+      updatedBy: readDemoSession()?.name ?? '示範醫師',
+      updatedAt: new Date().toISOString(),
       doctorNote: doctorFeedback.trim(),
       treatments: checkedItems,
       processedAt: new Date().toISOString(),
@@ -341,6 +362,10 @@ export default function IntoConsult() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#F8FAFC', fontFamily: 'sans-serif', position: 'relative' }}>
+      {demoNotice && <div role="status" style={{ padding: '8px 24px', color: '#92400E', backgroundColor: '#FEF3C7', fontSize: '13px' }}>{demoNotice}</div>}
+      <div role="note" style={{ padding: '8px 24px', color: '#7F1D1D', backgroundColor: '#FEE2E2', fontSize: '13px' }}>
+        處置建議、風險及解釋內容為原型示意，未經臨床驗證，不可作為診斷或治療依據。
+      </div>
       
       {/* ==================== 頂部導覽列與病患資訊 ==================== */}
       <div style={{ backgroundColor: 'white', borderBottom: '1px solid #E2E8F0', padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, zIndex: 10 }}>
@@ -422,7 +447,7 @@ export default function IntoConsult() {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {patient.xai_factors.map((factor: any, index: number) => {
+              {patient.xai_factors.map((factor, index) => {
                 const isPos = factor.type === 'pos';
                 const barColor = isPos ? '#F43F5E' : '#10B981';
                 const textColor = isPos ? '#BE123C' : '#047857';
@@ -690,7 +715,7 @@ export default function IntoConsult() {
                   <FileText size={14} /> 參考文獻比對來源 (PDF)
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-                  {patient.references.map((ref: any, idx: number) => (
+                  {patient.references.map((ref, idx) => (
                     <div key={idx} style={{ padding: '10px 12px', border: '1px solid #E2E8F0', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FAFAFA' }}>
                       <div>
                         <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#1E293B', marginBottom: '2px' }}>{ref.title}</div>
@@ -713,14 +738,14 @@ export default function IntoConsult() {
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-                <button onClick={() => promptFeedback('同意並採納 AI 預測與處置建議')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', backgroundColor: '#EEF2FF', border: '1px solid #E0E7FF', borderRadius: '8px', color: '#4F46E5', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', textAlign: 'left' }}>
-                  <span>1. 同意並採納建議</span><ChevronRight size={16} color="#818CF8" />
+                <button onClick={() => promptFeedback('完全採納')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', backgroundColor: '#EEF2FF', border: '1px solid #E0E7FF', borderRadius: '8px', color: '#4F46E5', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', textAlign: 'left' }}>
+                  <span>1. 完全採納建議</span><ChevronRight size={16} color="#818CF8" />
                 </button>
-                <button onClick={() => promptFeedback('病人狀況穩定，暫不處理')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '8px', color: '#475569', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', textAlign: 'left' }}>
-                  <span>2. 病人狀況穩定，暫不處理</span><ChevronRight size={16} color="#94A3B8" />
+                <button onClick={() => promptFeedback('部分採納')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '8px', color: '#475569', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', textAlign: 'left' }}>
+                  <span>2. 部分採納建議</span><ChevronRight size={16} color="#94A3B8" />
                 </button>
-                <button onClick={() => promptFeedback('處置建議不適當')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', backgroundColor: '#FEF2F2', border: '1px solid #FEE2E2', borderRadius: '8px', color: '#DC2626', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', textAlign: 'left' }}>
-                  <span>3. 處置建議不適當</span><ChevronRight size={16} color="#FCA5A5" />
+                <button onClick={() => promptFeedback('未採納')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', backgroundColor: '#FEF2F2', border: '1px solid #FEE2E2', borderRadius: '8px', color: '#DC2626', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', textAlign: 'left' }}>
+                  <span>3. 未採納建議</span><ChevronRight size={16} color="#FCA5A5" />
                 </button>
               </div>
             </div>
@@ -740,8 +765,14 @@ export default function IntoConsult() {
             </div>
             <p style={{ color: '#475569', lineHeight: '1.6', marginBottom: '24px' }}>
               您選擇了 <strong style={{ color: '#0F172A' }}>"{pendingFeedback}"</strong>。<br/>
-              提交後將納入模型再訓練參考，是否確認送出？
+              是否確認送出這筆醫師回饋？
             </p>
+            <label htmlFor="actual-disposition" style={{ display: 'block', marginBottom: '8px', color: '#334155', fontSize: '14px', fontWeight: 'bold' }}>實際轉歸</label>
+            <select id="actual-disposition" value={actualDisposition} onChange={(event) => setActualDisposition(event.target.value)} style={{ width: '100%', padding: '10px 12px', marginBottom: '16px', border: '1px solid #CBD5E1', borderRadius: '8px', font: 'inherit' }}>
+              <option value="加護病房">加護病房</option>
+              <option value="一般病房">一般病房</option>
+              <option value="急診留觀／出院">急診留觀／出院</option>
+            </select>
             <label htmlFor="doctor-feedback" style={{ display: 'block', marginBottom: '8px', color: '#334155', fontSize: '14px', fontWeight: 'bold' }}>
               醫生文字回饋 <span style={{ color: '#64748B', fontWeight: 'normal' }}>（選填）</span>
             </label>

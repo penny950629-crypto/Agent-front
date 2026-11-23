@@ -2,32 +2,9 @@ import { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom'; // ★ 1. 引入路由跳轉 Hook
 import { VitalBar } from '../components/VitalBar';
 import { useProcessedPatients } from '../context/useProcessedPatients';
+import { fetchPredictionPatients, getPredictedDisposition, type PredictionPatient } from '../services/predictionApi';
 
 // --- 介面與資料型別定義 ---
-interface PredictionPatient {
-  prediction_id: number;
-  excel_row_id: number;
-  patient_name: string;
-  triage_degree: number;
-  serious_risk_pct: number;
-  admit_distribution?: Record<string, string>;
-  arrivalTime?: string;
-  medicalRecordNo?: string;
-  gender?: string; // 新增
-  age?: number;    // 新增
-  complaint?: string;
- // ★ 新增：後端 API 直接回傳的生命徵象欄位
-  t?: number | string;
-  hr?: number | string;
-  rr?: number | string;
-  sbp?: number | string;
-  dbp?: number | string;
-  spo2?: number | string;
-  vitals?: {
-    t: number; hr: number; rr: number; sbp: number; dbp: number; spo2: number;
-  };
-}
-
 // 檢傷級別對應顏色設定
 const triageColors: Record<number, string> = {
   1: '#EF4444', // 紅
@@ -40,6 +17,7 @@ const triageColors: Record<number, string> = {
 export default function WaitingList() {
   const [patients, setPatients] = useState<PredictionPatient[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [demoNotice, setDemoNotice] = useState('');
   const navigate = useNavigate(); // ★ 2. 宣告 navigate 函式
   const { isPatientProcessed } = useProcessedPatients();
 
@@ -54,9 +32,9 @@ export default function WaitingList() {
 
   // 取得資料與狀態統計
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/predictions')
-      .then((res) => res.json())
-      .then((data: PredictionPatient[]) => {
+    let active = true;
+    fetchPredictionPatients().then(({ patients: data, isDemoData, message }) => {
+      if (!active) return;
         const enrichedData = data.map((item, index) => {
           // ★ 優先讀取後端資料，並轉為數字型別
           const t = Number(item.vitals?.t ?? item.t ?? 36.5);
@@ -78,16 +56,18 @@ export default function WaitingList() {
           };
         });
         setPatients(enrichedData);
+        setDemoNotice(isDemoData ? message : '');
         setLoading(false);
-      })
-      .catch((err) => {
-        console.error('讀取候診名單失敗:', err);
-        setLoading(false);
-      });
+    });
+    return () => { active = false; };
   }, []);
 
   // 計算各級檢傷人數
-  const activePatients = patients.filter((patient) => !isPatientProcessed(String(patient.prediction_id)));
+  const activePatients = patients.filter((patient) => {
+    const selectedArea = localStorage.getItem('fjcu-demo-duty-area');
+    const inSelectedArea = !selectedArea || !patient.area || patient.area === selectedArea;
+    return inSelectedArea && !isPatientProcessed(String(patient.prediction_id));
+  });
   const counts = { total: activePatients.length, 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   activePatients.forEach(p => {
     if (p.triage_degree >= 1 && p.triage_degree <= 5) {
@@ -190,6 +170,7 @@ export default function WaitingList() {
   return (
     <div style={{ backgroundColor: '#F9FAFB', minHeight: '100%', display: 'flex', flexDirection: 'column' }}>
       {renderTopBar()}
+      {demoNotice && <div role="status" style={{ padding: '8px 24px', color: '#92400E', backgroundColor: '#FEF3C7', fontSize: '13px' }}>{demoNotice}</div>}
       
       <div style={{ padding: '0 24px', flex: 1, overflow: 'auto' }}>
         {loading ? (
@@ -280,7 +261,7 @@ export default function WaitingList() {
               </div>
             ) : (
               displayedPatients.map((patient) => {
-                const admitPrediction = patient.serious_risk_pct > 50 ? 'ICU病房' : '未住院';
+                const admitPrediction = getPredictedDisposition(patient.admit_distribution);
                 const riskColor = patient.serious_risk_pct > 50 ? '#EF4444' : '#10B981';
 
                 return (

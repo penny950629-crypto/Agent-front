@@ -5,23 +5,28 @@ import { Home, Stethoscope, History, PieChart, User, Settings, LogOut, ChevronLe
 
 interface SidebarProps {
   onLogout: () => void;
+  role: 'doctor' | 'admin';
 }
 
-export default function Sidebar({ onLogout }: SidebarProps) {
+export default function Sidebar({ onLogout, role }: SidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
   // 控制側邊欄是否收合的狀態
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   // ★ 2. 在選單陣列最上方加入「主頁」 (路徑設為 '/')
-  const menuItems = [
-    { path: '/', icon: <Home size={24} />, label: '首頁' },
-    { path: '/triage', icon: <Stethoscope size={24} />, label: '管理' },
-    { path: '/records', icon: <History size={24} />, label: '病歷' },
-    { path: '/personnel', icon: <User size={24} />, label: '人員' },
-    { path: '/statistics', icon: <PieChart size={24} />, label: '統計' },
-    { path: '/settings', icon: <Settings size={24} />, label: '設定' },
-  ];
+  const menuItems = role === 'admin'
+    ? [
+      { path: '/personnel', icon: <User size={24} />, label: '人員' },
+      { path: '/settings', icon: <Settings size={24} />, label: '設定' },
+    ]
+    : [
+      { path: '/', icon: <Home size={24} />, label: '首頁' },
+      { path: '/triage', icon: <Stethoscope size={24} />, label: '管理' },
+      { path: '/records', icon: <History size={24} />, label: '病歷' },
+      { path: '/statistics', icon: <PieChart size={24} />, label: '統計' },
+      { path: '/settings', icon: <Settings size={24} />, label: '設定' },
+    ];
 
   return (
     <div style={{

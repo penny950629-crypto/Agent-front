@@ -1,34 +1,24 @@
 import { useEffect, useState } from 'react';
-
-interface Prediction {
-  prediction_id: number;
-  excel_row_id: number;
-  patient_name: string;
-  triage_degree: number;
-  serious_risk_pct: number;
-  admit_distribution: Record<string, string>;
-}
+import { fetchPredictionPatients, type PredictionPatient } from '../services/predictionApi';
 
 interface PredictionsProps {
   isDarkMode?: boolean;
 }
 
 export default function Predictions({ isDarkMode = false }: PredictionsProps) {
-  const [predictions, setPredictions] = useState<Prediction[]>([]);
+  const [predictions, setPredictions] = useState<PredictionPatient[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [demoNotice, setDemoNotice] = useState('');
 
   useEffect(() => {
-    // 呼叫 FastAPI 後端 API
-    fetch('http://127.0.0.1:8000/api/predictions')
-      .then((res) => res.json())
-      .then((data) => {
-        setPredictions(data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        console.error('無法取得預測數據:', err);
-        setLoading(false);
-      });
+    let active = true;
+    fetchPredictionPatients().then(({ patients, isDemoData, message }) => {
+      if (!active) return;
+      setPredictions(patients);
+      setDemoNotice(isDemoData ? message : '');
+      setLoading(false);
+    });
+    return () => { active = false; };
   }, []);
 
   const cardBg = isDarkMode ? '#1E293B' : '#FFFFFF';
@@ -38,6 +28,7 @@ export default function Predictions({ isDarkMode = false }: PredictionsProps) {
   return (
     <div style={{ padding: '24px', color: textColor, transition: 'color 0.3s' }}>
       <h2 style={{ marginBottom: '20px' }}>AI 檢傷與重症風險預測結果</h2>
+      {demoNotice && <p role="status" style={{ padding: '10px 12px', color: '#92400E', backgroundColor: '#FEF3C7', borderRadius: '8px' }}>{demoNotice}</p>}
 
       {loading ? (
         <p>載入預測數據中...</p>
@@ -70,7 +61,7 @@ export default function Predictions({ isDarkMode = false }: PredictionsProps) {
                   </td>
                   <td style={{ padding: '12px 16px' }}>
                     {item.admit_distribution &&
-                      Object.entries(item.admit_distribution)
+                      Object.entries(typeof item.admit_distribution === 'string' ? JSON.parse(item.admit_distribution) as Record<string, string> : item.admit_distribution)
                         .map(([key, val]) => `${key}: ${val}`)
                         .join(' | ')}
                   </td>
