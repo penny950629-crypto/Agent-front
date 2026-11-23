@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 // 1. 修改圖片的引入路徑，指向上層的 assets 資料夾
 import fjuLogo from '../assets/輔大醫院logo.png';
 
-export default function Header() {
+export default function Header({ userName }: { userName: string }) {
   // 建立一個狀態來儲存當前時間
   const [time, setTime] = useState(new Date());
 
@@ -65,7 +65,7 @@ export default function Header() {
           即時監測中
         </div>
         <div style={{ fontSize: '15px', color: '#334155' }}>
-          值班：<strong style={{ color: '#0F172A' }}>資深醫師</strong>
+          登入：<strong style={{ color: '#0F172A' }}>{userName}</strong>
         </div>
       </div>
     </div>

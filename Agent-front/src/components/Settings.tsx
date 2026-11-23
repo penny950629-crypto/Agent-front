@@ -1,27 +1,101 @@
 import { useState } from 'react';
 import { User, Bell, Activity, Eye, MapPin, Shield, KeyRound, CheckCircle2 } from 'lucide-react';
+import { changeDemoPassword, type DemoUser, verifyDemoPassword } from '../services/demoAuth';
 
 interface SettingsProps {
   isDarkMode: boolean;
   onToggleDarkMode: (value: boolean) => void;
+  currentUser: DemoUser;
+  onProfileChange: (name: string) => void;
 }
 
-export default function Settings({ isDarkMode, onToggleDarkMode }: SettingsProps) {
+interface UserInfo {
+  name: string;
+  empId: string;
+  department: string;
+  title: string;
+  licenseId: string;
+  email: string;
+  extension: string;
+}
+
+function getUserInfo(user: DemoUser): UserInfo {
+  const stored = localStorage.getItem(`fjcu-demo-profile-${user.employeeId}`);
+  if (stored) {
+    const parsed: unknown = JSON.parse(stored);
+    if (typeof parsed === 'object' && parsed !== null && 'name' in parsed && 'email' in parsed && 'extension' in parsed) {
+      return {
+        name: String(parsed.name),
+        empId: user.employeeId,
+        department: user.role === 'admin' ? '資訊管理' : '急診醫學部',
+        title: user.role === 'admin' ? '系統管理員' : '主治醫師',
+        licenseId: user.role === 'admin' ? '—' : '醫字第 045123 號',
+        email: String(parsed.email),
+        extension: String(parsed.extension),
+      };
+    }
+    throw new Error('個人資料格式錯誤');
+  }
+  return {
+    name: user.name,
+    empId: user.employeeId,
+    department: user.role === 'admin' ? '資訊管理' : '急診醫學部',
+    title: user.role === 'admin' ? '系統管理員' : '主治醫師',
+    licenseId: user.role === 'admin' ? '—' : '醫字第 045123 號',
+    email: user.role === 'admin' ? 'admin@fjuh.fju.edu.tw' : 'doctor@fjuh.fju.edu.tw',
+    extension: '3502',
+  };
+}
+
+export default function Settings({ isDarkMode, onToggleDarkMode, currentUser, onProfileChange }: SettingsProps) {
   const [activeTab, setActiveTab] = useState('profile');
 
   // 個人資訊狀態
-  const [userInfo, setUserInfo] = useState({
-    name: '楊子孟',
-    empId: 'D10982',
-    department: '急診醫學部',
-    title: '主治醫師',
-    licenseId: '醫字第 045123 號',
-    email: 'yang@fjuh.fju.edu.tw',
-    extension: '3502',
-  });
+  const [userInfo, setUserInfo] = useState<UserInfo>(() => getUserInfo(currentUser));
 
   const [alertLevel, setAlertLevel] = useState('high');
-  const [dutyArea, setDutyArea] = useState('急救重症區');
+  const [dutyArea, setDutyArea] = useState(() => localStorage.getItem(`fjcu-demo-duty-area-${currentUser.employeeId}`) || '急救重症區');
+  const [oldPassword, setOldPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordMessage, setPasswordMessage] = useState('');
+  const [profileMessage, setProfileMessage] = useState('');
+
+  const saveProfile = () => {
+    try {
+      localStorage.setItem(`fjcu-demo-profile-${currentUser.employeeId}`, JSON.stringify({
+        name: userInfo.name.trim(),
+        email: userInfo.email.trim(),
+        extension: userInfo.extension.trim(),
+      }));
+      onProfileChange(userInfo.name.trim());
+      setProfileMessage('個人資料已儲存。');
+    } catch (error) {
+      console.error('儲存個人資料失敗:', error);
+      setProfileMessage('儲存失敗，請稍後再試。');
+    }
+  };
+
+  const updatePassword = () => {
+    setPasswordMessage('');
+    if (!verifyDemoPassword(currentUser.username, oldPassword)) {
+      setPasswordMessage('舊密碼不正確。');
+      return;
+    }
+    if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/.test(newPassword)) {
+      setPasswordMessage('新密碼須至少 8 碼，並包含大小寫英文字母與數字。');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordMessage('兩次輸入的新密碼不一致。');
+      return;
+    }
+    changeDemoPassword(currentUser.username, newPassword);
+    setOldPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordMessage('密碼已更新（示範環境僅於此瀏覽器分頁保存）。');
+  };
 
   // 深色/淺色動態顏色設定
   const theme = {
@@ -163,10 +237,11 @@ export default function Settings({ isDarkMode, onToggleDarkMode }: SettingsProps
               </div>
 
               <div style={{ marginTop: '24px', display: 'flex', justifyContent: 'flex-end' }}>
-                <button style={{ padding: '10px 24px', backgroundColor: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
+                <button onClick={saveProfile} style={{ padding: '10px 24px', backgroundColor: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer' }}>
                   儲存修改
                 </button>
               </div>
+              {profileMessage && <p role="status" style={{ textAlign: 'right', color: theme.textSecondary, fontSize: '13px' }}>{profileMessage}</p>}
             </div>
           )}
 
@@ -214,7 +289,11 @@ export default function Settings({ isDarkMode, onToggleDarkMode }: SettingsProps
           {activeTab === 'area' && (
             <div>
               <h3 style={{ margin: '0 0 20px 0', color: theme.textPrimary, fontSize: '18px' }}>當前值班區域</h3>
-              <select value={dutyArea} onChange={(e) => setDutyArea(e.target.value)} style={{ padding: '10px 14px', borderRadius: '8px', border: `1px solid ${theme.border}`, backgroundColor: theme.inputBg, color: theme.textPrimary }}>
+              <select value={dutyArea} onChange={(e) => {
+                setDutyArea(e.target.value);
+                localStorage.setItem(`fjcu-demo-duty-area-${currentUser.employeeId}`, e.target.value);
+                localStorage.setItem('fjcu-demo-duty-area', e.target.value);
+              }} style={{ padding: '10px 14px', borderRadius: '8px', border: `1px solid ${theme.border}`, backgroundColor: theme.inputBg, color: theme.textPrimary }}>
                 <option value="急救重症區">急救重症區</option>
                 <option value="內科診間">內科診間</option>
                 <option value="外科診間">外科診間</option>
@@ -227,11 +306,13 @@ export default function Settings({ isDarkMode, onToggleDarkMode }: SettingsProps
             <div>
               <h3 style={{ margin: '0 0 20px 0', color: theme.textPrimary, fontSize: '18px' }}>帳號與安全設定</h3>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '400px' }}>
-                <input type="password" placeholder="輸入舊密碼" style={{ padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, backgroundColor: theme.inputBg, color: theme.textPrimary }} />
-                <input type="password" placeholder="輸入新密碼" style={{ padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, backgroundColor: theme.inputBg, color: theme.textPrimary }} />
-                <button style={{ padding: '10px', backgroundColor: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                <input type="password" value={oldPassword} onChange={(event) => setOldPassword(event.target.value)} placeholder="輸入舊密碼" autoComplete="current-password" style={{ padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, backgroundColor: theme.inputBg, color: theme.textPrimary }} />
+                <input type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} placeholder="新密碼（至少 8 碼，含大小寫與數字）" autoComplete="new-password" style={{ padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, backgroundColor: theme.inputBg, color: theme.textPrimary }} />
+                <input type="password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="再次輸入新密碼" autoComplete="new-password" style={{ padding: '10px 12px', borderRadius: '8px', border: `1px solid ${theme.border}`, backgroundColor: theme.inputBg, color: theme.textPrimary }} />
+                <button onClick={updatePassword} style={{ padding: '10px', backgroundColor: '#3B82F6', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
                   <KeyRound size={16} /> 更新密碼
                 </button>
+                {passwordMessage && <p role="status" style={{ margin: 0, color: passwordMessage.includes('已更新') ? '#059669' : '#DC2626', fontSize: '13px' }}>{passwordMessage}</p>}
               </div>
             </div>
           )}

@@ -1,20 +1,25 @@
 import React, { useState } from 'react';
 import { Users } from 'lucide-react';
+import { authenticateDemoUser, DEMO_PASSWORD, type DemoUser } from '../services/demoAuth';
 
 interface LoginProps {
-  onLogin: () => void;
+  onLogin: (user: DemoUser) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    // 這裡未來可以替換成呼叫後端 API 進行帳號密碼驗證
-    if (username && password) {
-      onLogin();
+    const user = authenticateDemoUser(username, password);
+    if (!user) {
+      setError('帳號或密碼錯誤，或此帳號已停用。');
+      return;
     }
+    setError('');
+    onLogin(user);
   };
 
   return (
@@ -94,6 +99,13 @@ export default function Login({ onLogin }: LoginProps) {
           >
             登入
           </button>
+          {error && <p role="alert" style={{ margin: 0, color: '#DC2626', fontSize: '13px' }}>{error}</p>}
+          <p style={{ margin: '4px 0 0', color: '#64748B', fontSize: '12px', lineHeight: 1.5 }}>
+            示範帳號：D1001（醫師）或 admin（管理員）；示範密碼：{DEMO_PASSWORD}
+          </p>
+          <p style={{ margin: 0, color: '#B45309', fontSize: '12px', lineHeight: 1.5 }}>
+            此為前端原型，請勿輸入真實帳密或病患資料；正式登入需由後端驗證。
+          </p>
           <div style={{ textAlign: 'center', marginTop: '8px' }}>
             <span style={{ fontSize: '13px', color: '#64748B' }}>忘記密碼？請聯絡系統管理員</span>
           </div>

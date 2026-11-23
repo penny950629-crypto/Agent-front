@@ -1,14 +1,38 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Search, Filter, UserPlus, Phone, Stethoscope, X } from 'lucide-react';
 
+interface StaffMember {
+  id: string;
+  name: string;
+  role: string;
+  status: string;
+  department: string;
+  phone: string;
+}
+
+const STAFF_STORAGE_KEY = 'fjcu-demo-staff';
+const defaultStaff: StaffMember[] = [
+  { id: 'D1001', name: '楊子孟', role: '急診主治醫師', status: '值班中', department: '急診醫學部', phone: 'ext. 8101' },
+  { id: 'D1002', name: 'Judy', role: '急診住院醫師', status: '值班中', department: '急診醫學部', phone: 'ext. 8102' },
+  { id: 'D1003', name: 'Nick', role: '急診總醫師', status: '會議中', department: '急診醫學部', phone: 'ext. 8105' },
+  { id: 'D1004', name: 'Amy', role: '急診住院醫師', status: '下班', department: '急診醫學部', phone: 'ext. 8106' },
+  { id: 'D1005', name: 'Tim', role: '急診主治醫師', status: '值班中', department: '急診醫學部', phone: 'ext. 8108' },
+];
+
+function readStaffList(): StaffMember[] {
+  const stored = localStorage.getItem(STAFF_STORAGE_KEY);
+  if (!stored) return defaultStaff;
+  const parsed: unknown = JSON.parse(stored);
+  if (!Array.isArray(parsed)) throw new Error('醫師帳號資料格式錯誤');
+  return parsed as StaffMember[];
+}
+
 export default function Personnel() {
-  const [staffList, setStaffList] = useState([
-    { id: 'D1001', name: '楊子孟', role: '急診主治醫師', status: '值班中', department: '急診醫學部', phone: 'ext. 8101' },
-    { id: 'D1002', name: 'Judy', role: '急診住院醫師', status: '值班中', department: '急診醫學部', phone: 'ext. 8102' },
-    { id: 'D1003', name: 'Nick', role: '急診總醫師', status: '會議中', department: '急診醫學部', phone: 'ext. 8105' },
-    { id: 'D1004', name: 'Amy', role: '急診住院醫師', status: '下班', department: '急診醫學部', phone: 'ext. 8106' },
-    { id: 'D1005', name: 'Tim', role: '急診主治醫師', status: '值班中', department: '急診醫學部', phone: 'ext. 8108' },
-  ]);
+  const [staffList, setStaffList] = useState<StaffMember[]>(readStaffList);
+
+  useEffect(() => {
+    localStorage.setItem(STAFF_STORAGE_KEY, JSON.stringify(staffList));
+  }, [staffList]);
 
   // 搜尋與篩選狀態
   const [searchTerm, setSearchTerm] = useState('');
@@ -16,7 +40,14 @@ export default function Personnel() {
 
   // 行內編輯狀態
   const [editingRowId, setEditingRowId] = useState<string | null>(null);
-  const [editRowData, setEditRowData] = useState<any>({});
+  const [editRowData, setEditRowData] = useState<StaffMember>({
+    id: '',
+    name: '',
+    role: '',
+    status: '',
+    department: '',
+    phone: '',
+  });
 
   // 新增專用的 Modal 狀態
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -39,18 +70,22 @@ export default function Personnel() {
       alert('請填寫醫師姓名！');
       return;
     }
+    if (staffList.some((staff) => staff.id === addFormData.id)) {
+      alert('醫師編號重複，請重新新增。');
+      return;
+    }
     setStaffList([addFormData, ...staffList]);
     setIsAddModalOpen(false);
   };
 
-  const handleStartEdit = (staff: any) => {
+  const handleStartEdit = (staff: StaffMember) => {
     setEditingRowId(staff.id);
     setEditRowData({ ...staff });
   };
 
   const handleCancelEdit = () => {
     setEditingRowId(null);
-    setEditRowData({});
+    setEditRowData({ id: '', name: '', role: '', status: '', department: '', phone: '' });
   };
 
   const handleSaveEdit = () => {
@@ -63,8 +98,10 @@ export default function Personnel() {
   };
 
   const handleDelete = (id: string) => {
-    if (window.confirm('確定要刪除這位醫師嗎？這個動作無法復原。')) {
-      setStaffList(staffList.filter(staff => staff.id !== id));
+    if (window.confirm('確定要停用這個醫師帳號嗎？停用後將無法登入。')) {
+      setStaffList((current) => current.map((staff) =>
+        staff.id === id ? { ...staff, status: '停用' } : staff,
+      ));
     }
   };
 
@@ -79,6 +116,7 @@ export default function Personnel() {
     switch (status) {
       case '值班中': return { bg: '#DCFCE7', text: '#16A34A', border: '#BBF7D0' };
       case '會議中': return { bg: '#FEF9C3', text: '#CA8A04', border: '#FEF08A' };
+      case '停用': return { bg: '#FEE2E2', text: '#B91C1C', border: '#FECACA' };
       case '下班': default: return { bg: '#F1F5F9', text: '#64748B', border: '#E2E8F0' };
     }
   };
@@ -115,6 +153,7 @@ export default function Personnel() {
               <option value="值班中">值班中</option>
               <option value="會議中">會議中</option>
               <option value="下班">下班</option>
+              <option value="停用">停用</option>
             </select>
           </div>
 
@@ -233,6 +272,7 @@ export default function Personnel() {
                           <option value="值班中">值班中</option>
                           <option value="會議中">會議中</option>
                           <option value="下班">下班</option>
+                          <option value="停用">停用</option>
                         </select>
                       ) : (
                         <span style={{ padding: '4px 12px', borderRadius: '6px', backgroundColor: statusStyle.bg, color: statusStyle.text, border: `1px solid ${statusStyle.border}`, fontSize: '13px', fontWeight: '600', whiteSpace: 'nowrap' }}>
@@ -252,7 +292,7 @@ export default function Personnel() {
                         ) : (
                           <>
                             <button onClick={() => handleStartEdit(staff)} style={{ backgroundColor: 'transparent', border: 'none', color: '#3B82F6', fontWeight: '600', cursor: 'pointer', fontSize: '14px', padding: 0 }}>編輯</button>
-                            <button onClick={() => handleDelete(staff.id)} style={{ backgroundColor: 'transparent', border: 'none', color: '#EF4444', fontWeight: '600', cursor: 'pointer', fontSize: '14px', padding: 0 }}>刪除</button>
+                            <button onClick={() => handleDelete(staff.id)} disabled={staff.status === '停用'} style={{ backgroundColor: 'transparent', border: 'none', color: '#EF4444', fontWeight: '600', cursor: staff.status === '停用' ? 'not-allowed' : 'pointer', opacity: staff.status === '停用' ? 0.5 : 1, fontSize: '14px', padding: 0 }}>停用</button>
                           </>
                         )}
                       </div>
@@ -284,6 +324,7 @@ export default function Personnel() {
               <h3 style={{ margin: 0, fontSize: '18px', color: '#1E293B' }}>新增醫師</h3>
               <button onClick={() => setIsAddModalOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#94A3B8' }}><X size={20} /></button>
             </div>
+            <p style={{ margin: '-8px 0 16px', color: '#64748B', fontSize: '12px' }}>前端示範帳號可使用員工編號及示範密碼 demo123 登入。</p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div>
