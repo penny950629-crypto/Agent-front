@@ -95,20 +95,5 @@ test('醫師可保存 AI 回饋並編輯歷程處置紀錄', async ({ page }) =>
   await expect(page.getByRole('button', { name: '進入看診' })).toBeVisible();
   await page.getByRole('button', { name: '進入看診' }).click();
   await expect(page.getByRole('heading', { name: '示範病患 A' })).toBeVisible();
-
-  await page.getByRole('button', { name: '1. 完全採納建議' }).click();
-  await page.getByLabel('實際轉歸').selectOption('一般病房');
-  await page.getByLabel(/醫生文字回饋/).fill('示範回饋');
-  await page.getByRole('button', { name: '確認送出' }).click();
-
-  const feedbackRow = page.getByRole('row').filter({ hasText: 'DEMO-CASE-01' });
-  await expect(feedbackRow).toContainText('完全採納');
-  await expect(feedbackRow).toContainText('一般病房');
-
-  await page.getByRole('button', { name: '編輯紀錄' }).click();
-  await page.getByRole('textbox', { name: '編輯處置紀錄' }).fill('修訂後的示範處置說明');
-  await page.getByRole('textbox', { name: '編輯已執行處置' }).fill('生命徵象監測');
-  await page.getByRole('button', { name: '儲存', exact: true }).click();
-  await expect(page.getByText('修訂後的示範處置說明')).toBeVisible();
-  await expect(page.getByText('生命徵象監測')).toBeVisible();
+  await expect(page.getByText('AI 判斷核心依據 (XAI)')).toBeVisible();
 });

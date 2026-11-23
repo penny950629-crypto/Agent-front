@@ -1,29 +1,12 @@
-import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { useProcessedPatients } from '../context/useProcessedPatients';
+import { useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Bot, BrainCircuit } from 'lucide-react';
 import { fetchPredictionPatients, getPredictedDisposition } from '../services/predictionApi';
-import { readDemoSession } from '../services/demoAuth';
-import { 
-  ArrowLeft, 
-  Bot, 
-  BrainCircuit, 
-  BookOpen, 
-  ChevronRight, 
-  FileText,
-  AlertTriangle
-} from 'lucide-react';
 
 interface XaiFactor {
   name: string;
   impact: number;
   type: 'pos' | 'neg';
-}
-
-interface ConsultReference {
-  title: string;
-  desc: string;
-  score: string;
-  page: string;
 }
 
 interface ConsultPatient {
@@ -34,768 +17,164 @@ interface ConsultPatient {
   level: number;
   summary: string;
   vitals: Record<string, string | number>;
-  ai_risk_score: number;
-  ai_disposition: string;
-  ensemble_votes: { RF: boolean; XGB: boolean; KNN: boolean };
-  xai_factors: XaiFactor[];
-  references: ConsultReference[];
+  aiRiskScore: number;
+  aiDisposition: string;
+  ensembleVotes: { RF: boolean; XGB: boolean; KNN: boolean };
+  xaiFactors: XaiFactor[];
 }
 
+const generateXai = (
+  complaint: string,
+  level: number,
+  riskScore: number,
+  spo2?: number,
+  temperature?: number,
+) => {
+  const text = (complaint || '').toLowerCase();
+  const p1 = Math.max(Number((riskScore * 0.55).toFixed(1)), 0.5);
+  const p2 = Math.max(Number((riskScore * 0.30).toFixed(1)), 0.3);
+  const p3 = Math.max(Number((riskScore * 0.15).toFixed(1)), 0.1);
+  let factors: XaiFactor[] = [
+    { name: '主訴症狀與特徵匹配度', impact: p1, type: 'pos' },
+    { name: '生理生命徵象數值偏移', impact: p2, type: 'pos' },
+    { name: '年齡與基礎共病風險權重', impact: p3, type: 'pos' },
+  ];
+
+  if (text.includes('胸痛') || text.includes('胸悶')) {
+    factors = [
+      { name: '主訴特徵：胸痛相關症狀匹配', impact: p1, type: 'pos' },
+      { name: `血氧與生命徵象異常 (SpO2=${spo2 || 95})`, impact: p2, type: 'pos' },
+      { name: '心血管系統風險共病史', impact: p3, type: 'pos' },
+    ];
+  } else if (text.includes('呼吸') || text.includes('喘')) {
+    factors = [
+      { name: '呼吸速率與血氧窘迫指標', impact: p1, type: 'pos' },
+      { name: '呼吸系統主訴文字特徵', impact: p2, type: 'pos' },
+      { name: '年齡血行動力學權重', impact: p3, type: 'pos' },
+    ];
+  } else if (text.includes('發燒') || text.includes('畏寒') || text.includes('肺炎')) {
+    factors = [
+      { name: `體溫與感染指標異常 (T=${temperature || 38.5})`, impact: p1, type: 'pos' },
+      { name: '感染相關主訴詞彙萃取', impact: p2, type: 'pos' },
+      { name: '心跳速率代償性加快', impact: p3, type: 'pos' },
+    ];
+  } else if (text.includes('腹痛') || text.includes('腹瀉') || text.includes('嘔吐')) {
+    factors = [
+      { name: '急性腹部疼痛分級特徵', impact: p1, type: 'pos' },
+      { name: '腸胃系統主訴文字權重', impact: p2, type: 'pos' },
+      { name: '脫水與血壓代償指標', impact: p3, type: 'pos' },
+    ];
+  } else if (level === 1 || level === 2) {
+    factors = [
+      { name: '檢傷級別極高危險群警示', impact: p1, type: 'pos' },
+      { name: '生理生命徵象嚴重不穩定', impact: p2, type: 'pos' },
+      { name: '多重器官衰竭風險模型預測', impact: p3, type: 'pos' },
+    ];
+  }
+  return factors;
+};
+
 export default function IntoConsult() {
-  const { id } = useParams(); 
+  const { id } = useParams();
   const navigate = useNavigate();
-  const { archivePatient } = useProcessedPatients();
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState(true);
   const [patient, setPatient] = useState<ConsultPatient | null>(null);
   const [demoNotice, setDemoNotice] = useState('');
 
-  // Modal 與 Toast 狀態管理
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [pendingFeedback, setPendingFeedback] = useState('');
-  const [doctorFeedback, setDoctorFeedback] = useState('');
-  const [actualDisposition, setActualDisposition] = useState('急診留觀／出院');
-
-  // 處置項目的勾選狀態
-  const [selectedTreatments, setSelectedTreatments] = useState<Record<string, boolean>>({
-    "安排 12 導程心電圖 (ECG)": true,
-    "抽血檢驗心肌酵素 (Troponin)": true,
-    "氧氣鼻導管, 開立 Aspirin": false,
-    "聯絡照會心臟內科 (CV) 評估": false,
-  });
-
-  const handleCheckboxChange = (treatmentName: string) => {
-    setSelectedTreatments(prev => ({
-      ...prev,
-      [treatmentName]: !prev[treatmentName]
-    }));
-  };
-    // 只根據現有處置文字決定卡片的圖示與顏色
-  const getTreatmentVisual = (name: string) => {
-    const text = name.toLowerCase();
-
-    const categories = [
-      {
-        keywords: [
-          'aspirin', 'acetaminophen', 'paracetamol',
-          '藥物', '藥品', '藥', '止痛', '止吐',
-          '解熱', '抗生素'
-        ],
-        emoji: '💊',
-        label: '藥物',
-        bg: '#EFF6FF',
-        border: '#BFDBFE',
-        tagBg: '#DBEAFE',
-        tagColor: '#1D4ED8',
-      },
-      {
-        keywords: [
-          '注射', '針筒', '輸液', '點滴',
-          '靜脈導管', 'normal saline'
-        ],
-        emoji: '💉',
-        label: '注射／輸液',
-        bg: '#F0FDF9',
-        border: '#A7F3D0',
-        tagBg: '#D1FAE5',
-        tagColor: '#047857',
-      },
-      {
-        keywords: [
-          '檢驗', '檢查', '抽血', '血液',
-          '影像', 'x 光', 'x-ray', 'ecg',
-          'troponin', 'cbc', 'crp', '心電圖',
-          '超音波', '培養'
-        ],
-        emoji: '🩸',
-        label: '檢驗',
-        bg: '#FFFCF3',
-        border: '#FDE68A',
-        tagBg: '#FEF3C7',
-        tagColor: '#92400E',
-      },
-      {
-        keywords: [
-          '監測', '生命徵象', '血氧',
-          '血壓', '心跳', '呼吸速率'
-        ],
-        emoji: '🩺',
-        label: '監測',
-        bg: '#FAF7FF',
-        border: '#E9D5FF',
-        tagBg: '#F3E8FF',
-        tagColor: '#7E22CE',
-      },
-      {
-        keywords: [
-          '氧氣', '鼻導管', '呼吸支持',
-          '氧氣面罩', '呼吸照護'
-        ],
-        emoji: '🫁',
-        label: '呼吸支持',
-        bg: '#F0FDFA',
-        border: '#99F6E4',
-        tagBg: '#CCFBF1',
-        tagColor: '#0F766E',
-      },
-      {
-        keywords: ['會診', '照會', '專科醫師'],
-        emoji: '🩺',
-        label: '會診',
-        bg: '#FAF5FF',
-        border: '#DDD6FE',
-        tagBg: '#EDE9FE',
-        tagColor: '#6D28D9',
-      },
-    ];
-
-    // 找出這段文字涉及的所有類型，不修改原本的處置內容
-    const matched = categories.filter(category =>
-      category.keywords.some(keyword => text.includes(keyword))
-    );
-
-    // 同一句有多種類型時，同時顯示圖示與標籤
-    const primary = matched[0];
-
-    if (!primary) {
-      return {
-        emoji: '📋',
-        label: '其他處置',
-        bg: '#F8FAFC',
-        border: '#CBD5E1',
-        tagBg: '#E2E8F0',
-        tagColor: '#475569',
-      };
-    }
-
-    return {
-      emoji: matched.map(category => category.emoji).join(' '),
-      label: matched.map(category => category.label).join('／'),
-      bg: primary.bg,
-      border: primary.border,
-      tagBg: primary.tagBg,
-      tagColor: primary.tagColor,
-    };
-  };
-  // 根據主訴與實際惡化風險機率（riskScore），動態計算成比例的 XAI 貢獻度與處置建議
-  const generateXAIAndTreatment = (complaint: string, level: number, riskScore: number, spo2?: number, t?: number): { xai_factors: XaiFactor[]; treatments: Record<string, boolean> } => {
-    const text = (complaint || '').toLowerCase();
-    
-    // ★ 依照該病患真實的 3hr 風險分數，按比例拆解 XAI 貢獻度，使其合理對應總風險
-    const p1 = Math.max(Number((riskScore * 0.55).toFixed(1)), 0.5);
-    const p2 = Math.max(Number((riskScore * 0.30).toFixed(1)), 0.3);
-    const p3 = Math.max(Number((riskScore * 0.15).toFixed(1)), 0.1);
-
-    let xai_factors: XaiFactor[] = [
-      { name: "主訴症狀與特徵匹配度", impact: p1, type: 'pos' },
-      { name: "生理生命徵象數值偏移", impact: p2, type: 'pos' },
-      { name: "年齡與基礎共病風險權重", impact: p3, type: 'pos' }
-    ];
-
-    let treatments: Record<string, boolean> = {
-      "安排相關血液與影像檢驗": true,
-      "密切監測生命徵象波動": true,
-      "給予適當症狀支持治療": false,
-      "必要時會診相關專科醫師": false,
-    };
-
-    if (text.includes('胸痛') || text.includes('胸悶')) {
-      xai_factors = [
-        { name: "主訴特徵: 胸痛相關症狀匹配", impact: p1, type: 'pos' },
-        { name: `血氧與生命徵象異常 (SpO2=${spo2 || 95})`, impact: p2, type: 'pos' },
-        { name: "心血管系統風險共病史", impact: p3, type: 'pos' }
-      ];
-      treatments = {
-        "安排 12 導程心電圖 (ECG)": true,
-        "抽血檢驗心肌酵素 (Troponin)": true,
-        "氧氣鼻導管, 必要時給予 Aspirin": false,
-        "聯絡照會心臟內科 (CV) 評估": false,
-      };
-    } else if (text.includes('呼吸') || text.includes('喘')) {
-      xai_factors = [
-        { name: "呼吸速率與血氧窘迫指標", impact: p1, type: 'pos' },
-        { name: "呼吸系統主訴文字特徵", impact: p2, type: 'pos' },
-        { name: "年齡血行動力學權重", impact: p3, type: 'pos' }
-      ];
-      treatments = {
-        "給予氧氣面罩或鼻導管支持": true,
-        "安排緊急胸部 X 光檢查": true,
-        "監測血氧飽和度與呼吸狀況": true,
-        "照會胸腔內科或急診專科醫師": false,
-      };
-    } else if (text.includes('發燒') || text.includes('畏寒') || text.includes('肺炎')) {
-      xai_factors = [
-        { name: `體溫與感染指標異常 (T=${t || 38.5})`, impact: p1, type: 'pos' },
-        { name: "感染相關主訴詞彙萃取", impact: p2, type: 'pos' },
-        { name: "心跳速率代償性加快", impact: p3, type: 'pos' }
-      ];
-      treatments = {
-        "抽血檢驗白血球與發炎指數 (CBC/CRP)": true,
-        "給予口服或靜脈解熱鎮痛劑": true,
-        "安排尿液或血液細菌培養": false,
-        "視病況評估給予輸液或抗生素": false,
-      };
-    } else if (text.includes('腹痛') || text.includes('腹瀉') || text.includes('嘔吐')) {
-      xai_factors = [
-        { name: "急性腹部疼痛分級特徵", impact: p1, type: 'pos' },
-        { name: "腸胃系統主訴文字權重", impact: p2, type: 'pos' },
-        { name: "脫水與血壓代償指標", impact: p3, type: 'pos' }
-      ];
-      treatments = {
-        "建立靜脈輸液通道補充水分": true,
-        "安排腹部超音波或 X 光檢查": true,
-        "給予止吐或胃腸道症狀藥物": false,
-        "外科急症會診評估": false,
-      };
-    } else if (level === 1 || level === 2) {
-      xai_factors = [
-        { name: "檢傷級別極高危險群警示", impact: p1, type: 'pos' },
-        { name: "生理生命徵象嚴重不穩定", impact: p2, type: 'pos' },
-        { name: "多重器官衰竭風險模型預測", impact: p3, type: 'pos' }
-      ];
-      treatments = {
-        "立即移至急救室進行搶救處置": true,
-        "持續發動全方位生命徵象監測": true,
-        "建立雙大口徑靜脈導管路": true,
-        "主治醫師與各專科團隊進駐": true,
-      };
-    }
-
-    return { xai_factors, treatments };
-  };
-
-  // 從後端 API 獲取真實資料庫數據
   useEffect(() => {
     let active = true;
     fetchPredictionPatients().then(({ patients: data, isDemoData, message }) => {
       if (!active) return;
       setDemoNotice(isDemoData ? message : '');
-        const found = data.find((p, index) => {
-          const generatedId = p.medicalRecordNo || `00${8877665 + index}J`;
-          return String(p.prediction_id) === id || generatedId === id;
+      const found = data.find((item, index) => {
+        const generatedId = item.medicalRecordNo || `00${8877665 + index}J`;
+        return String(item.prediction_id) === id || generatedId === id;
+      });
+      if (found) {
+        const risk = Number(found.serious_risk_pct) || 0;
+        const level = Number(found.triage_degree) || 0;
+        setPatient({
+          id: found.medicalRecordNo || String(found.prediction_id),
+          name: found.patient_name || '示範病患',
+          gender: found.gender || '未提供',
+          age: Number(found.age) || 0,
+          level,
+          summary: found.complaint || '無特殊主訴紀錄',
+          vitals: {
+            temperature: found.t ?? '--',
+            heartRate: found.hr ?? '--',
+            respiratoryRate: found.rr ?? '--',
+            systolicBloodPressure: found.sbp ?? '--',
+            diastolicBloodPressure: found.dbp ?? '--',
+            spo2: found.spo2 ?? '--',
+          },
+          aiRiskScore: risk,
+          aiDisposition: getPredictedDisposition(found.admit_distribution),
+          ensembleVotes: {
+            RF: risk > 20,
+            XGB: risk > 30,
+            KNN: risk > 40,
+          },
+          xaiFactors: generateXai(found.complaint || '', level, risk, Number(found.spo2), Number(found.t)),
         });
-
-        if (found) {
-          const disposition = getPredictedDisposition(found.admit_distribution);
-
-          const dynamicData = generateXAIAndTreatment(found.complaint || '', found.triage_degree, found.serious_risk_pct, Number(found.spo2), Number(found.t));
-          setSelectedTreatments(dynamicData.treatments);
-
-          setPatient({
-            id: found.medicalRecordNo || `00${8877665 + data.indexOf(found)}J`,
-            name: found.patient_name || '示範病患',
-            gender: found.gender || '未提供',
-            age: Number(found.age) || 0,
-            level: Number(found.triage_degree) || 0,
-            summary: found.complaint || '無特殊主訴紀錄',
-            vitals: {
-              temperature: found.t ?? '--',
-              heartRate: found.hr ?? '--',
-              respiratoryRate: found.rr ?? '--',
-              systolicBloodPressure: found.sbp ?? '--',
-              diastolicBloodPressure: found.dbp ?? '--',
-              spo2: found.spo2 ?? '--',
-            },
-            ai_risk_score: Number(found.serious_risk_pct) || 0,
-            ai_disposition: disposition,
-            ensemble_votes: { 
-              RF: Number(found.serious_risk_pct) > 20,
-              XGB: Number(found.serious_risk_pct) > 30,
-              KNN: Number(found.serious_risk_pct) > 40
-            },
-            xai_factors: dynamicData.xai_factors,
-            references: [
-              { title: "1. 急診臨床處置指引彙編", desc: "主訴與生命徵象對照...", score: "0.94", page: "P.12" },
-              { title: "2. 急重症風險評估標準流程", desc: "模型特徵權重解析...", score: "0.82", page: "P.18" }
-            ]
-          });
-        }
-        setLoading(false);
+      }
+      setLoading(false);
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+    };
   }, [id]);
 
-  const promptFeedback = (reason: string) => {
-    setPendingFeedback(reason);
-    setDoctorFeedback('');
-    setIsModalOpen(true);
-  };
-
-  const confirmSubmitFeedback = () => {
-    if (!patient || !pendingFeedback) return;
-    const checkedItems = Object.entries(selectedTreatments)
-      .filter(([, isChecked]) => isChecked)
-      .map(([name]) => name);
-    archivePatient({
-      patientId: String(id ?? patient.id),
-      name: patient.name || '未提供姓名',
-      medicalRecordNo: patient.id || '未提供病歷號',
-      gender: patient.gender || '未提供',
-      age: Number(patient.age) || 0,
-      triageLevel: Number(patient.level) || 0,
-      complaint: patient.summary || '未提供主訴',
-      riskPercent: Number(patient.ai_risk_score) || 0,
-      decision: pendingFeedback,
-      admissionOutcome: actualDisposition,
-      updatedBy: readDemoSession()?.name ?? '示範醫師',
-      updatedAt: new Date().toISOString(),
-      doctorNote: doctorFeedback.trim(),
-      treatments: checkedItems,
-      processedAt: new Date().toISOString(),
-      vitals: patient.vitals,
-    });
-    setIsModalOpen(false);
-    navigate('/records');
-  };
-
-  if (loading) {
-    return <div style={{ padding: '40px', textAlign: 'center', color: '#64748B' }}>載入診間資料中...</div>;
-  }
-
+  if (loading) return <div style={{ padding: 40, textAlign: 'center', color: '#64748B' }}>載入診間資料中...</div>;
   if (!patient) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', backgroundColor: '#F8FAFC' }}>
-        <div style={{ fontSize: '18px', color: '#EF4444', marginBottom: '16px', fontWeight: 'bold' }}>找不到該名病患資料 (ID: {id})</div>
-        <button onClick={() => navigate(-1)} style={{ padding: '8px 16px', backgroundColor: '#3B82F6', color: 'white', borderRadius: '8px', border: 'none', cursor: 'pointer' }}>返回候診名單</button>
+      <div style={{ display: 'flex', height: '100%', alignItems: 'center', justifyContent: 'center', flexDirection: 'column' }}>
+        <div style={{ marginBottom: 16, color: '#EF4444', fontWeight: 'bold' }}>找不到該名病患資料 (ID: {id})</div>
+        <button type="button" onClick={() => navigate(-1)} style={{ padding: '8px 16px', color: 'white', backgroundColor: '#3B82F6', border: 'none', borderRadius: 6 }}>返回候診名單</button>
       </div>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#F8FAFC', fontFamily: 'sans-serif', position: 'relative' }}>
-      {demoNotice && <div role="status" style={{ padding: '8px 24px', color: '#92400E', backgroundColor: '#FEF3C7', fontSize: '13px' }}>{demoNotice}</div>}
-      <div role="note" style={{ padding: '8px 24px', color: '#7F1D1D', backgroundColor: '#FEE2E2', fontSize: '13px' }}>
-        處置建議、風險及解釋內容為原型示意，未經臨床驗證，不可作為診斷或治療依據。
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', backgroundColor: '#F8FAFC', fontFamily: 'sans-serif' }}>
+      {demoNotice && <div role="status" style={{ padding: '8px 24px', color: '#92400E', backgroundColor: '#FEF3C7', fontSize: 13 }}>{demoNotice}</div>}
+      <div role="note" style={{ padding: '8px 24px', color: '#7F1D1D', backgroundColor: '#FEE2E2', fontSize: 13 }}>
+        風險及解釋內容為原型示意，未經臨床驗證，不可作為診斷或治療依據。
       </div>
-      
-      {/* ==================== 頂部導覽列與病患資訊 ==================== */}
-      <div style={{ backgroundColor: 'white', borderBottom: '1px solid #E2E8F0', padding: '12px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, zIndex: 10 }}>
-        
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-          <button 
-            type="button"
-            onClick={() => navigate(-1)}
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '6px', background: '#F1F5F9', border: 'none', color: '#64748B', borderRadius: '6px', cursor: 'pointer', transition: '0.2s' }}
-            title="返回名單"
-          >
-            <ArrowLeft size={20} />
-          </button>
-          <div style={{ height: '24px', width: '1px', backgroundColor: '#CBD5E1' }}></div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <h1 style={{ fontSize: '20px', fontWeight: '900', color: '#0F172A', margin: 0 }}>{patient.name}</h1>
-            <span style={{ fontSize: '14px', color: '#64748B' }}>{patient.gender}, {patient.age}歲</span>
-            <span style={{ fontSize: '14px', color: '#CBD5E1' }}>|</span>
-            <span style={{ fontSize: '14px', color: '#94A3B8', fontFamily: 'monospace' }}>{patient.id}</span>
-            <span style={{ backgroundColor: '#F1F5F9', color: '#475569', padding: '4px 10px', borderRadius: '4px', fontSize: '13px', fontWeight: 'bold', border: '1px solid #E2E8F0' }}>
-              檢傷 {patient.level} 級
-            </span>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', backgroundColor: '#F0FDF4', border: '1px solid #BBF7D0', padding: '6px 12px', borderRadius: '8px', color: '#166534', fontSize: '13px', fontWeight: 'bold' }}>
-          <Bot size={16} className="text-emerald-500" />
-          <span>模型狀態: 正常</span>
-          <div style={{ width: '8px', height: '8px', backgroundColor: '#22C55E', borderRadius: '50%', marginLeft: '4px', boxShadow: '0 0 0 2px #BBF7D0' }}></div>
-        </div>
+      <div style={{ backgroundColor: 'white', borderBottom: '1px solid #E2E8F0', padding: '12px 24px', display: 'flex', alignItems: 'center', gap: 16 }}>
+        <button type="button" onClick={() => navigate(-1)} style={{ padding: 6, border: 'none', borderRadius: 6, backgroundColor: '#F1F5F9', cursor: 'pointer' }} title="返回名單">
+          <ArrowLeft size={20} />
+        </button>
+        <h1 style={{ margin: 0, fontSize: 20, color: '#0F172A' }}>{patient.name}</h1>
+        <span style={{ color: '#64748B' }}>{patient.gender}, {patient.age} 歲</span>
+        <span style={{ color: '#94A3B8', fontFamily: 'monospace' }}>{patient.id}</span>
+        <span style={{ backgroundColor: '#F1F5F9', color: '#475569', padding: '4px 10px', borderRadius: 4, fontSize: 13 }}>檢傷 {patient.level} 級</span>
       </div>
-
-      {/* ==================== 主要內容區塊 ==================== */}
-      <div style={{ padding: '24px 32px', flex: 1, overflow: 'auto', display: 'flex', gap: '24px', alignItems: 'stretch' }}>
-        
-        {/* 左側：AI 惡化預測與 XAI 核心依據 */}
-        <div style={{ width: '450px', display: 'flex', flexDirection: 'column', gap: '16px', flexShrink: 0 }}>
-          
-          <div style={{ backgroundColor: '#1E1B4B', borderRadius: '12px', padding: '20px', color: 'white', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', fontSize: '15px' }}>
-                <Bot size={18} color="#A5B4FC" /> AI 惡化預測 
-              </div>
-              <div style={{ display: 'flex', gap: '4px' }}>
-                <span style={{ backgroundColor: patient.ensemble_votes.RF ? '#E11D48' : '#334155', color: '#FFF', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>RF:{patient.ensemble_votes.RF ? '惡化' : '安全'}</span>
-                <span style={{ backgroundColor: patient.ensemble_votes.XGB ? '#E11D48' : '#334155', color: '#FFF', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>XGB:{patient.ensemble_votes.XGB ? '惡化' : '安全'}</span>
-                <span style={{ backgroundColor: patient.ensemble_votes.KNN ? '#E11D48' : '#334155', color: '#FFF', fontSize: '10px', padding: '2px 6px', borderRadius: '4px', fontFamily: 'monospace' }}>KNN:{patient.ensemble_votes.KNN ? '惡化' : '安全'}</span>
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '16px' }}>
-              <div>
-                <div style={{ fontSize: '12px', color: '#A5B4FC', marginBottom: '6px' }}>3小時內嚴重惡化機率</div>
-                <div style={{ fontSize: '32px', fontWeight: '900', color: 'white', lineHeight: '1', marginBottom: '8px' }}>
-                  {patient.ai_risk_score} <span style={{ fontSize: '16px', fontWeight: 'normal' }}>%</span>
-                </div>
-                <div style={{ width: '100%', height: '6px', backgroundColor: '#312E81', borderRadius: '3px', overflow: 'hidden' }}>
-                  <div style={{ width: `${Math.min(patient.ai_risk_score, 100)}%`, height: '100%', backgroundColor: '#EF4444', borderRadius: '3px', transition: 'width 1s ease' }}></div>
-                </div>
-              </div>
-              
-              <div>
-                <div style={{ fontSize: '12px', color: '#A5B4FC', marginBottom: '6px' }}>系統預測病患轉歸動向</div>
-                <div style={{ backgroundColor: '#4338CA', borderRadius: '8px', padding: '10px', textAlign: 'center', fontWeight: 'bold', fontSize: '15px', border: '1px solid #4F46E5', color: '#FFF' }}>
-                  {patient.ai_disposition}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ backgroundColor: '#FEFCE8', borderRadius: '12px', padding: '20px', border: '1px solid #FEF08A' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'bold', fontSize: '15px', color: '#854D0E' }}>
-                <BrainCircuit size={18} color="#CA8A04" /> AI 判斷核心依據 (XAI)
-              </div>
-              <span style={{ backgroundColor: '#FEF08A', color: '#A16207', fontSize: '12px', padding: '4px 10px', borderRadius: '20px', fontWeight: 'bold' }}>
-                特徵貢獻度
-              </span>
-            </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {patient.xai_factors.map((factor, index) => {
-                const isPos = factor.type === 'pos';
-                const barColor = isPos ? '#F43F5E' : '#10B981';
-                const textColor = isPos ? '#BE123C' : '#047857';
-                const bgColor = isPos ? '#FFF1F2' : '#ECFDF5';
-                const borderColor = isPos ? '#FECDD3' : '#A7F3D0';
-                const sign = isPos ? '+' : '';
-                // 將進度條寬度根據實際百分比調整（放大倍率讓視覺更明顯但符合比例）
-                const width = Math.min(Math.abs(factor.impact) * 2.5, 100);
-
-                return (
-                  <div key={index} style={{ 
-                    display: 'flex', flexDirection: 'column', padding: '12px 14px', borderRadius: '10px', 
-                    border: `2px solid ${borderColor}`, backgroundColor: bgColor, 
-                    boxShadow: '0 1px 2px rgba(0,0,0,0.04)'
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: '8px' }}>
-                      <span style={{ fontWeight: 'bold', color: '#1E293B', fontSize: '14px' }}>{factor.name}</span>
-                      <span style={{ color: textColor, fontWeight: '900', fontFamily: 'monospace', fontSize: '16px' }}>{sign}{factor.impact}%</span>
-                    </div>
-                    <div style={{ width: '100%', backgroundColor: 'rgba(255,255,255,0.8)', height: '10px', borderRadius: '999px', overflow: 'hidden', border: '1px solid rgba(226,232,240,0.5)' }}>
-                      <div style={{ backgroundColor: barColor, height: '100%', borderRadius: '999px', width: `${width}%`, transition: 'width 1s ease' }}></div>
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-
+      <div style={{ padding: '24px 32px', flex: 1, overflow: 'auto', display: 'grid', gridTemplateColumns: 'minmax(420px, 1fr) minmax(420px, 1fr)', gap: 24 }}>
+        <div style={{ backgroundColor: '#1E1B4B', borderRadius: 12, padding: 20, color: 'white', alignSelf: 'start' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontWeight: 'bold' }}><Bot size={18} /> AI 惡化預測</div>
+          <div style={{ fontSize: 12, color: '#A5B4FC', marginBottom: 6 }}>3 小時內嚴重惡化機率</div>
+          <div style={{ fontSize: 32, fontWeight: 900 }}>{patient.aiRiskScore}%</div>
+          <div style={{ marginTop: 16, fontSize: 12, color: '#A5B4FC' }}>系統預測病患轉歸動向</div>
+          <div style={{ marginTop: 6, backgroundColor: '#4338CA', borderRadius: 8, padding: 10, textAlign: 'center', fontWeight: 'bold' }}>{patient.aiDisposition}</div>
         </div>
-
-        {/* TF-IDF 知識庫比對處置建議 (視覺化)*/}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          
-          <div style={{ backgroundColor: 'white', borderRadius: '12px', border: '1px solid #E2E8F0', padding: '24px', flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-            
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: '900', fontSize: '16px', color: '#1E293B' }}>
-                  <BookOpen size={20} color="#4F46E5" /> TF-IDF 知識庫比對處置建議
+        <div style={{ backgroundColor: '#FEFCE8', borderRadius: 12, padding: 20, border: '1px solid #FEF08A', alignSelf: 'start' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, fontWeight: 'bold', color: '#854D0E' }}><BrainCircuit size={18} /> AI 判斷核心依據 (XAI)</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {patient.xaiFactors.map((factor, index) => (
+              <div key={index} style={{ padding: 12, borderRadius: 10, border: '1px solid #FECDD3', backgroundColor: '#FFF1F2' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <span style={{ color: '#1E293B', fontWeight: 'bold' }}>{factor.name}</span>
+                  <span style={{ color: '#BE123C', fontWeight: 900 }}>+{factor.impact}%</span>
+                </div>
+                <div style={{ backgroundColor: 'white', height: 10, borderRadius: 999, overflow: 'hidden' }}>
+                  <div style={{ backgroundColor: '#F43F5E', height: '100%', width: `${Math.min(factor.impact * 2.5, 100)}%` }} />
                 </div>
               </div>
-              
-              <p style={{ fontSize: '13px', color: '#64748B', marginBottom: '16px', marginTop: 0 }}>
-                依據護理主訴文字萃取特徵，比對 Clinical Guidelines PDF，系統已自動勾選指引中萃取標準處置步驟。
-              </p>
-
-              <div style={{ borderLeft: '4px solid #4F46E5', backgroundColor: '#F8FAFC', borderRadius: '0 8px 8px 0', padding: '18px 20px', borderTop: '1px solid #E2E8F0', borderRight: '1px solid #E2E8F0', borderBottom: '1px solid #E2E8F0', marginBottom: '20px' }}>
-                <div style={{ fontWeight: 'bold', color: '#1E293B', fontSize: '14px', marginBottom: '14px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  💡 建議標準處置 (依據: 臨床實證醫療指引)
-                </div>
-                
-                
-                {/* 處置分類圖例 */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  flexWrap: 'wrap',
-                  gap: '8px',
-                  marginBottom: '18px',
-                }}>
-                  <span style={{ fontSize: '13px', color: '#64748B' }}>
-                    處置分類：
-                  </span>
-                  {[
-                    { emoji: '💊', label: '藥物', color: '#2563EB', bg: '#EFF6FF' },
-                    { emoji: '💉', label: '注射', color: '#047857', bg: '#ECFDF5' },
-                    { emoji: '🩸', label: '檢驗', color: '#B45309', bg: '#FFFBEB' },
-                    { emoji: '🩺', label: '監測／會診', color: '#7E22CE', bg: '#FAF5FF' },
-                    { emoji: '🫁', label: '呼吸支持', color: '#0F766E', bg: '#F0FDFA' },
-                  ].map(item => (
-                    <span key={item.label} style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      padding: '5px 10px',
-                      borderRadius: '8px',
-                      backgroundColor: item.bg,
-                      color: item.color,
-                      fontSize: '12px',
-                      fontWeight: '600',
-                    }}>
-                      {item.emoji} {item.label}
-                    </span>
-                  ))}
-                </div>
-
-                {/* 依原本處置文字產生視覺化卡片 */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-                  gap: '14px',
-                }}>
-                  {Object.keys(selectedTreatments).map((name) => {
-                    const visual = getTreatmentVisual(name);
-                    const checked = selectedTreatments[name];
-
-                    return (
-                      <label
-                        key={name}
-                        style={{
-                          position: 'relative',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          justifyContent: 'space-between',
-                          gap: '12px',
-                          minHeight: '118px',
-                          padding: '16px 18px',
-                          borderRadius: '18px',
-                          border: `1px dashed ${
-                            checked ? visual.tagColor : visual.border
-                          }`,
-                          backgroundColor: checked ? visual.bg : visual.bg,
-                          boxShadow: checked
-                            ? `inset 0 0 0 1px ${visual.border}`
-                            : 'none',
-                          cursor: 'pointer',
-                          overflow: 'hidden',
-                          transition: 'all 0.2s ease',
-                        }}
-                      >
-                        {/* 右上角勾選框 */}
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => handleCheckboxChange(name)}
-                          style={{
-                            position: 'absolute',
-                            top: '14px',
-                            right: '14px',
-                            width: '22px',
-                            height: '22px',
-                            accentColor: '#4F46E5',
-                            cursor: 'pointer',
-                            zIndex: 2,
-                          }}
-                        />
-
-                        {/* 淡色 Emoji 浮水印 */}
-                        <span
-                          aria-hidden="true"
-                          style={{
-                            position: 'absolute',
-                            right: '12px',
-                            bottom: '-12px',
-                            fontSize: '76px',
-                            opacity: 0.12,
-                            pointerEvents: 'none',
-                            lineHeight: 1,
-                          }}
-                        >
-                          {visual.emoji.split(' ')[0]}
-                        </span>
-
-                        {/* 分類標籤 */}
-                        <span style={{
-                          position: 'relative',
-                          zIndex: 1,
-                          display: 'flex',
-                          alignItems: 'center',
-                          alignSelf: 'flex-start',
-                          maxWidth: 'calc(100% - 32px)',
-                          padding: '5px 12px',
-                          borderRadius: '999px',
-                          backgroundColor: visual.tagBg,
-                          color: visual.tagColor,
-                          fontSize: '12px',
-                          fontWeight: '700',
-                        }}>
-                          {visual.emoji} {visual.label}
-                        </span>
-
-                        {/* 原本的處置文字：不更改、不重新產生 */}
-                        <span style={{
-                          position: 'relative',
-                          zIndex: 1,
-                          fontSize: '15px',
-                          lineHeight: 1.6,
-                          fontWeight: '700',
-                          color: '#1E293B',
-                          paddingRight: '8px',
-                          overflowWrap: 'anywhere',
-                        }}>
-                          {name}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-
-                {/* 勾選數量與操作 */}
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  flexWrap: 'wrap',
-                  gap: '12px',
-                  marginTop: '20px',
-                  paddingTop: '16px',
-                  borderTop: '1px solid #E2E8F0',
-                }}>
-                  <span style={{
-                    fontSize: '14px',
-                    color: '#64748B',
-                  }}>
-                    已勾選處置項目：
-                    <strong style={{ color: '#4F46E5' }}>
-                      {' '}{Object.values(selectedTreatments).filter(Boolean).length}
-                    </strong>
-                    {' / '}{Object.keys(selectedTreatments).length} 項
-                  </span>
-
-                  <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '12px',
-                  }}>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedTreatments(prev =>
-                          Object.fromEntries(
-                            Object.keys(prev).map(name => [name, true])
-                          )
-                        );
-                      }}
-                      style={{
-                        border: 'none',
-                        background: 'transparent',
-                        color: '#4F46E5',
-                        fontSize: '13px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      全選
-                    </button>
-
-                    <span style={{ color: '#CBD5E1' }}>•</span>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedTreatments(prev =>
-                          Object.fromEntries(
-                            Object.keys(prev).map(name => [name, false])
-                          )
-                        );
-                      }}
-                      style={{
-                        border: 'none',
-                        background: 'transparent',
-                        color: '#64748B',
-                        fontSize: '13px',
-                        cursor: 'pointer',
-                      }}
-                    >
-                      全取消
-                    </button>
-                  </div>
-                </div>
-
-              </div>
-
-              <div style={{ marginBottom: '20px' }}>
-                <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#64748B', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '10px' }}>
-                  <FileText size={14} /> 參考文獻比對來源 (PDF)
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-                  {patient.references.map((ref, idx) => (
-                    <div key={idx} style={{ padding: '10px 12px', border: '1px solid #E2E8F0', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#FAFAFA' }}>
-                      <div>
-                        <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#1E293B', marginBottom: '2px' }}>{ref.title}</div>
-                        <div style={{ fontSize: '11px', color: '#94A3B8' }}>{ref.desc}</div>
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', minWidth: '40px' }}>
-                        <span style={{ color: '#10B981', fontWeight: 'bold', fontSize: '13px' }}>{ref.score}</span>
-                        <span style={{ color: '#94A3B8', fontSize: '10px' }}>{ref.page}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* 回饋收集 */}
-            <div style={{ borderTop: '1px solid #E2E8F0', paddingTop: '20px', marginTop: '10px' }}>
-              <div style={{ fontWeight: '900', fontSize: '15px', color: '#0F172A', marginBottom: '12px' }}>
-                是否採納建議
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '12px' }}>
-                <button onClick={() => promptFeedback('完全採納')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', backgroundColor: '#EEF2FF', border: '1px solid #E0E7FF', borderRadius: '8px', color: '#4F46E5', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', textAlign: 'left' }}>
-                  <span>1. 完全採納建議</span><ChevronRight size={16} color="#818CF8" />
-                </button>
-                <button onClick={() => promptFeedback('部分採納')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0', borderRadius: '8px', color: '#475569', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', textAlign: 'left' }}>
-                  <span>2. 部分採納建議</span><ChevronRight size={16} color="#94A3B8" />
-                </button>
-                <button onClick={() => promptFeedback('未採納')} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 14px', backgroundColor: '#FEF2F2', border: '1px solid #FEE2E2', borderRadius: '8px', color: '#DC2626', fontSize: '13px', fontWeight: 'bold', cursor: 'pointer', textAlign: 'left' }}>
-                  <span>3. 未採納建議</span><ChevronRight size={16} color="#FCA5A5" />
-                </button>
-              </div>
-            </div>
-
+            ))}
           </div>
-
         </div>
       </div>
-
-      {/* 確認彈出視窗 */}
-      {isModalOpen && (
-        <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(15,23,42,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50, backdropFilter: 'blur(4px)' }}>
-          <div style={{ backgroundColor: 'white', borderRadius: '16px', padding: '32px', width: 'min(480px, calc(100vw - 32px))', boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1)' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px', color: '#F59E0B' }}>
-              <AlertTriangle size={28} />
-              <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold', color: '#0F172A' }}>確認提交回饋</h3>
-            </div>
-            <p style={{ color: '#475569', lineHeight: '1.6', marginBottom: '24px' }}>
-              您選擇了 <strong style={{ color: '#0F172A' }}>"{pendingFeedback}"</strong>。<br/>
-              是否確認送出這筆醫師回饋？
-            </p>
-            <label htmlFor="actual-disposition" style={{ display: 'block', marginBottom: '8px', color: '#334155', fontSize: '14px', fontWeight: 'bold' }}>實際轉歸</label>
-            <select id="actual-disposition" value={actualDisposition} onChange={(event) => setActualDisposition(event.target.value)} style={{ width: '100%', padding: '10px 12px', marginBottom: '16px', border: '1px solid #CBD5E1', borderRadius: '8px', font: 'inherit' }}>
-              <option value="加護病房">加護病房</option>
-              <option value="一般病房">一般病房</option>
-              <option value="急診留觀／出院">急診留觀／出院</option>
-            </select>
-            <label htmlFor="doctor-feedback" style={{ display: 'block', marginBottom: '8px', color: '#334155', fontSize: '14px', fontWeight: 'bold' }}>
-              醫生文字回饋 <span style={{ color: '#64748B', fontWeight: 'normal' }}>（選填）</span>
-            </label>
-            <textarea
-              id="doctor-feedback"
-              value={doctorFeedback}
-              onChange={(event) => setDoctorFeedback(event.target.value)}
-              placeholder="可補充決策原因或臨床觀察..."
-              rows={4}
-              style={{ width: '100%', boxSizing: 'border-box', padding: '10px 12px', marginBottom: '20px', border: '1px solid #CBD5E1', borderRadius: '8px', resize: 'vertical', font: 'inherit' }}
-            />
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-              <button onClick={() => setIsModalOpen(false)} style={{ padding: '8px 16px', backgroundColor: '#F1F5F9', color: '#475569', borderRadius: '8px', border: 'none', fontWeight: 'bold', cursor: 'pointer' }}>
-                取消
-              </button>
-              <button onClick={confirmSubmitFeedback} style={{ padding: '8px 16px', backgroundColor: '#3B82F6', color: 'white', borderRadius: '8px', border: 'none', fontWeight: 'bold', cursor: 'pointer', boxShadow: '0 4px 6px -1px rgba(59, 130, 246, 0.3)' }}>
-                確認送出
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
     </div>
   );
 }
